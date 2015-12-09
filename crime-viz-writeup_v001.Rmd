@@ -1,0 +1,153 @@
+---
+title: 'San Francisco Crime: Peaks at noon and in late afternoon'
+author: "Ingo Nader"
+date: "7 Dec 2015"
+output: html_document
+---
+
+## Introduction
+
+This document was written to analyze the variation in crimes (i.e., different crime categories) in San Francisco during the summer of 2014 (1 June - 31 August 2014). It was created using `R 3.1.3`, RStudio 0.98.1102 and the `knitr` package. (For reasons why I chose this setup over Juypter, please see [here](http://opiateforthemass.es/articles/why-i-dont-like-jupyter-fka-ipython-notebook/)).
+
+## Data Preparation
+
+First, all necessary packages are loaded, and then the data were loaded into `R` using the `readr` package. Because of laziness, the column names were converted to lower case.
+
+```{r init, echo=FALSE, warning=FALSE, message=FALSE}
+path_dat <- "/Users/in186000/data-nth-sync/coursera/data-science-at-scale-uni-washington/datasci_course_materials/assignment6/"
+setwd(path_dat)
+```
+
+```{r load, warning=FALSE, message=FALSE}
+library(readr)       ## read_csv()
+library(ggplot2)     ## for plotting
+library(scales)      ## date scales()
+library(grid)        ## unit()
+library(lubridate)   ## for date conversions
+library(plyr)        ## for creating data summaries
+
+dat_sf <- read.csv(file = "sanfrancisco_incidents_summer_2014.csv")
+names(dat_sf) <- tolower(names(dat_sf))
+
+```
+
+Next, we add some additional indicator variables (hour of the day, minute, number of minutes since midnight, as well as the half-hour interval since midnight), and we create a summary for each crime category and each hour of the day:
+
+```{r data-prep}
+## add indicators:
+dat_sf <- mutate(dat_sf,
+    timets = hm(time),              ## time stamp
+    hr = hour(hm(time)),            ## hour of the day
+    mn = minute(hm(time)),          ## minute
+    mncont = hr * 60 + mn,          ## minute of the day (continuous)
+    mncont30 = floor(mncont / 30)   ## 30-minute interval of the day
+)
+
+## make full grid of all times and categories:
+dat_sf_grid <- expand.grid(hr = 0:23, category = levels(dat_sf$category))
+
+## number of crimes per category per hour:
+dat_sf_summary <- ddply(dat_sf, c("hr", "category"), summarize,
+    cat_sum = length(category))
+
+## add position for plotting additional labels:
+dat_sf_summary <- ddply(dat_sf_summary, "hr", transform,
+    pos_sum = cumsum(cat_sum) - 0.5 * cat_sum)
+
+## but remove all but 18 (to plot only once), and remove low frequency categories:
+dat_sf_summary$pos_sum[dat_sf_summary$hr != 18] <- NA
+dat_sf_summary$pos_sum[dat_sf_summary$cat_sum < 50] <- NA
+
+## join summary table to full grid for plotting:
+dat_sf_summary <- join(dat_sf_grid, dat_sf_summary, by = c("hr", "category"), type="left")
+
+## replace NA's with 0:
+dat_sf_summary$cat_sum[is.na(dat_sf_summary$cat_sum)] <- 0
+
+```
+
+## How do incidents vary by time of day?
+
+In order to inspect how incidents in San Francisco vary by the time of day, we use the summary table to create an area plot visualization. For each hour of the day, the number of occurences for each category are stacked on top of each other, and color coded. Since there are many categories, the colors are not easily distinguishable, so I have added labels within the plot for the most common categories. 
+
+```{r indidents-tod, warning=FALSE, fig.height=8, fig.width=13}
+## area plot of absolute values:
+ggplot(dat_sf_summary, aes(x=hr, y=cat_sum)) + 
+    geom_area(aes(fill=category), color="black", position="stack") +
+    geom_text(aes(x=hr, y=pos_sum, label=category), size=3, hjust=.6, vjust=1) +
+    theme(
+        legend.text = element_text(size = 8),#, colour = "red", angle = 0)
+        legend.key.size = unit(.5, "cm")
+    ) +
+    scale_x_continuous(breaks=seq(from=0, to=24, by=2)) +
+    xlab("hour of the day") +
+    ylab("number of occurances")
+
+```
+
+Some interesting patterns can be seen from the plot:
+
+- The total number of crimes is lowest at about 4 am. 
+- The total number of crimes has a first peak at noon, then drops slightly, and has another peak during the late afternoon.
+- The biggest crime category is `LARCENY/THEFT`, which contributes to both of the peaks (probably more to the afternoon peak).
+- The next biggest crime category, after `NON-CRIMINAL` and `OTHER OFFENSES`, is `ASSAULT`, which also contributes to both peaks. 
+
+However, the fact that this category is the next biggest is not clearly visible in this plot. In order to make it more clearly visible how each crime category varies by the hour of the day, we create a plot with a panel for each individual category. The categories are sorted by the total number of crimes in that category, but the color coding has been kept unchanged to the plot above. Note that the axes are allowed to vary freely for each plot. This makes it easier to see the patterns in each crime category, but, on the other hand, makes comparisons of number of occurances across different crime categories less easy.
+
+```{r incidents-ind, warning=FALSE, fig.height=8, fig.width=13}
+## calculate frequencies of crimes:
+freq <- with(dat_sf, tapply(category, category, length))
+
+## create a sorted factor of categories (sorted by frequency):
+dat_sf_summary$category_sorted <- factor(dat_sf_summary$category, levels=names(sort(freq)))
+
+ggplot(dat_sf_summary, aes(x=hr, y=cat_sum)) +
+    geom_line(aes(color=category), size=1, alpha=1) +
+    theme(
+        legend.text = element_text(size = 8),#, colour = "red", angle = 0)
+        legend.key.size = unit(.5, "cm")
+    ) +
+    scale_x_continuous(breaks=seq(from=0, to=24, by=4)) +
+    facet_wrap(~ category_sorted, scales="free") +
+    xlab("hour of the day") +
+    ylab("number of occurances")
+
+```
+
+Some of the crime categories occur very rarely in our data, and hence we cannot see any clear patterns. This is especially true of the first two lines of panels. In the third line, we can see some clearer patterns:
+
+- `DRIVING UNDER THE INFLUENCE` starts to occur starting from 4pm, and rises steadily until 1am in the morning. This pattern is obviously closly related to the pattern seen in `DRUNKENNESS`
+- `PROSTITUTION` has a sharp rise around 3 pm, followed by a drop in frequency, and later rising steadily until midnight.
+- `FRAUD` seems to have a sharp peak at noon, as well as an elevated frequency after midnight. This pattern is somewhat related to `ROBBERY`, which also has a peak at noon, but unlike for fraud, there is a steady rise of robberies in the afternoon which has a second peak around and shortly after midnight.
+- Crimes in the `MISSING PERSON` category also peak at noon.
+- Unspecific crime categories (`OTHER OFFENCES`, `NON-CRIMINAL`, `SECONDARY CODES`) have peaks at noon as well as in the afternoon.
+- Crimes in the categories of `SUSPICIOUS OCCURENCE`, `DRUG/NARCOTIC`, `WARRANTS`, `ASSAULTS`, as well as in theft-related categories `VEHICLE THEFT` and `LARCENY/THEFT` seem to contribute to the peak of crimes in the late afternoon.
+
+## Frequency of crimes during afternoon peak
+
+To inspect the frequency of crimes during the afternoon peak, we look at a bar chart of crimes per category between 4:00pm and 7:59pm (hours of day 16 to 19). 
+
+```{r barplot, warning=FALSE, fig.height=8, fig.width=13}
+## select afternoon data and convert hour of day into a factor:
+dat_plot <- dat_sf_summary[dat_sf_summary$hr %in% c(16:19),]
+dat_plot$hr <- factor(dat_plot$hr)
+
+## barplot, sorted:
+ggplot(dat_plot, aes(x=reorder(category, cat_sum), y=cat_sum)) + 
+    geom_bar(aes(fill=hr, color=hr), stat="identity", position="stack") + 
+    coord_flip() + 
+    xlab("crime category") + 
+    ylab("number of occurances") + 
+    scale_y_continuous(breaks=seq(from=0, to=2800, by=200)) +
+    scale_fill_discrete(name="hour\nof day") +
+    scale_color_discrete(name="hour\nof day")
+
+```
+
+As already seen from the order of panels in the plot above (where the panels were sorted by increasing frequency of occurances in all of the data), `LARCENY/THEFT` is by far the most common category. During afternoon hours in the period of 1 June - 31 August 2014 (92 days), there were 2735 occurances. The second most frequent category `OTHER OFFENCES` only had 842 afternoon occurances in that period, and `ASSAULT` only 605.
+
+The order of the most common crimes in the afternoon remains almost unchanged when compared to the order of the most common crimes during the day. Only at rank 12 of categories we find the first difference: `TRESPASSING` is more common in the afternoon, compared to `ROBBERY`. This probably reflecs the fact that the bulk of crimes happen in these afternoon hours.
+
+In summary, it seems that the peak in crimes at noon can be attributed to the crime categories `MISSING PERSON`, `ROBBERY` and `FRAUD`, and maybe `ASSAULT`, as well as some unspecific crime categories. The peak in the afternoon is mostly carried by theft-related categories (which are also very frequent in total), intoxication-related categories (alcohol and drugs), and violence-related crimes (`ASSAULT`, `WEAPON LAWS`).
+
+
